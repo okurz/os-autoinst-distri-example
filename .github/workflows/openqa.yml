@@ -1,0 +1,63 @@
+---
+name: openQA - github action example
+# yamllint disable-line rule:truthy
+on:
+  push:
+  pull_request:
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+env:
+  OPENQA_TOKEN: ${{ secrets.OPENQA_API_USER }}:${{ secrets.OPENQA_API_KEY }}:${{ secrets.OPENQA_API_SECRET }}
+  OPENQA_HOST: https://openqa.opensuse.org
+
+jobs:
+  # check_comments:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     # an alternative could be https://github.com/Khan/pull-request-comment-trigger/issues/13 with no dependencies
+  #     # or https://github.com/orgs/community/discussions/25389#discussioncomment-3247738
+  #     # https://github.com/okurz/os-autoinst-distri-example/actions/runs/4064974199/jobs/6999056903
+  #     # showed error "TypeError: Cannot read property 'body' of undefined" so
+  #     # I guess the action khan/pull-request-comment-trigger@v1.1.0 can not
+  #     # work anymore or not at the moment
+  #     - uses: khan/pull-request-comment-trigger@v1.1.0
+  #       id: check
+  #       with:
+  #         trigger: '@openqa'
+  #         reaction: rocket
+  #       env:
+  #         GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+  #     - run: 'echo Found it!'
+  #       if: steps.check.outputs.triggered == 'true'
+
+  # openqa-mon currently exits with exit code 0 if jobs incomplete, see
+  # https://github.com/grisu48/openqa-mon/issues/39#issuecomment-1412135651,
+  # using alternative approach
+  #trigger_and_monitor_openqa_using_openqa-mon:
+  #  runs-on: ubuntu-latest
+  #  container:
+  #    image: registry.opensuse.org/home/okurz/container/containers/tumbleweed:curl-openqa-mon
+  #  steps:
+  #    - name: trigger and monitor openQA test
+  #      run: >
+  #        set -o pipefail &&
+  #        repo_ref=$GITHUB_REPOSITORY#$GITHUB_REF_NAME &&
+  #        job_id=$(curl -u $OPENQA_TOKEN -X POST -d "CASEDIR=$GITHUB_SERVER_URL/$repo_ref" -d "TEST=test-$GITHUB_EVENT_NAME-$repo_ref" -d "BUILD=$repo_ref" $OPENQA_HOST/api/v1/jobs | jq .id) || echo "Failed: $job_id" &&
+  #        job=$OPENQA_HOST/t$job_id &&
+  #        echo "Triggered openQA job: $job" &&
+  #        openqa-mon --continuous 10 --exit --follow $job
+  trigger_and_monitor_openqa:
+    runs-on: ubuntu-latest
+    container:
+      image: registry.opensuse.org/home/okurz/container/containers/tumbleweed:curl-jq
+    steps:
+      - name: trigger and monitor openQA test
+        run: >
+          set -o pipefail &&
+          repo_ref=$GITHUB_REPOSITORY#$GITHUB_REF_NAME &&
+          job_id=$(set -x && curl -sS -u $OPENQA_TOKEN -X POST -d "CASEDIR=$GITHUB_SERVER_URL/$repo_ref" -d "TEST=test-$GITHUB_EVENT_NAME-$repo_ref" -d "BUILD=$repo_ref" -d "DISTRI=example" -d "WORKER_CLASs=openqaworker20" -d 'NEEDLES_DIR=%CASEDIR%/needles' $OPENQA_HOST/api/v1/jobs | jq .id) || echo "Failed: $job_id" &&
+          job=$OPENQA_HOST/api/v1/jobs/$job_id &&
+          while :; do read state result < <(echo $(curl -sS $job | jq -r .job.state,.job.result)) && [[ $state = 'done' ]] && break || echo "job state of job ID $job_id : $state, waiting…" && sleep 10; done &&
+          echo "job ID $job_id : state: $state, result: $result" &&
+          [[ $result = 'passed' ]]
